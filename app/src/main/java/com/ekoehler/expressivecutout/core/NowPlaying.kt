@@ -1,6 +1,5 @@
 package com.ekoehler.expressivecutout.core
 
-import androidx.compose.runtime.Stable
 import androidx.compose.ui.graphics.ImageBitmap
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -50,6 +49,10 @@ data class MediaProgress(
     val speed: Float,
     /** [android.os.SystemClock.elapsedRealtime] when [positionMs] was sampled. */
     val anchorUptimeMs: Long,
+    /** Whether the session actually declares [PlaybackState.ACTION_SEEK_TO]. A player can report a
+     *  duration without supporting seeking (some radio/podcast apps do this for a "time elapsed"
+     *  display only); dragging the bar for one of those would silently do nothing. */
+    val canSeek: Boolean = false,
 ) {
     /** The position right now, extrapolated from the anchor and clamped to the track length. */
     fun positionAt(nowUptimeMs: Long): Long {
@@ -66,9 +69,11 @@ data class MediaProgress(
 }
 
 /** The transport actions the music tile exposes. Backed by the active media session's controls. */
-@Stable
 interface MediaTransport {
     fun previous()
     fun playPause()
     fun next()
+
+    /** Seek to an absolute position in the track, in milliseconds. */
+    fun seekTo(positionMs: Long)
 }
