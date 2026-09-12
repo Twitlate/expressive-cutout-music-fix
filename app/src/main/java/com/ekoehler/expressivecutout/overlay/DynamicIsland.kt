@@ -2772,15 +2772,26 @@ private fun IconBadge(
     val override = event.colorOverride
     val badgeColor: Color
     val glyphColor: Color
-    when {
-        container != null -> {
-            badgeColor = container.resolve()
-            glyphColor = when (container) {
-                is CutoutColor.Dynamic -> onDynamicRole(container.role)
-                is CutoutColor.Solid ->
-                    if (badgeColor.luminance() > 0.5f) PillTextColorDark else PillTextColor
-            }
-        }
+   when (val icon = trailingIcon) {
+    is NotificationIcon.AppIcon -> {
+        AppIcon(
+            modifier = Modifier.size(24.dp),
+            packageName = icon.packageName,
+            className = icon.className
+        )
+    }
+    is NotificationIcon.DrawableIcon -> {
+        Image(
+            modifier = Modifier.size(24.dp),
+            painter = rememberDrawablePainter(drawable = icon.drawable),
+            contentDescription = null
+        )
+    }
+    else -> {
+        // Essential fallback branch to fix the compilation error
+    }
+}
+
 
         override != null -> {
             val tint = override.resolve()
