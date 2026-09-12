@@ -26,10 +26,8 @@ import com.ekoehler.expressivecutout.overlay.toArtImageBitmap
 import com.ekoehler.expressivecutout.service.CutoutNotificationListenerService
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancelChildren
-import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 
 /**
@@ -48,30 +46,23 @@ class MediaPlaybackMonitor(private val context: Context) {
     private val appPreferences = AppPreferences(context)
     private val scope = CoroutineScope(Dispatchers.Main + SupervisorJob())
 
-    /** Controllers we're currently watching, paired with the callback registered on each. */
+    // Controllers we're currently watching, paired with the callback registered on each.
     private val watched = mutableMapOf<MediaController, MediaController.Callback>()
 
-    /** Enabled state of dynamic tiles */
+    // Enabled state of dynamic tiles
     private var tileEnabled: Map<DynamicTile, Boolean> = emptyMap()
 
-    /** Packages the user muted on the Apps screen; their sessions are ignored outright. */
+    // Packages the user muted on the Apps screen; their sessions are ignored outright.
     private var disabledApps: Set<String> = emptySet()
 
-    /** The track last surfaced as a "show" signal, so we don't re-pop on every state tick. */
+    // The track last surfaced as a "show" signal, so we don't re-pop on every state tick.
     private var lastShownKey: String? = null
-
-    /** The pending "show" emission, held for [SHOW_DEBOUNCE_MS] so a start settles into one pop. */
-    private var showJob: Job? = null
 
     private val sessionsListener =
         MediaSessionManager.OnActiveSessionsChangedListener { controllers ->
             rebind(controllers.orEmpty())
         }
 
-    /**
-     * Begins watching the active media sessions and the tile's own enabled flag. Does nothing
-     * without notification access, since the session manager is unavailable until then.
-     */
     fun start() {
         val manager = sessionManager ?: return
         scope.launch {
@@ -93,24 +84,13 @@ class MediaPlaybackMonitor(private val context: Context) {
         }.onFailure { Log.w(TAG, "Media session access unavailable", it) }
     }
 
-    /**
-     * Unregisters every session callback and clears the published state, so a disabled tile leaves
-     * nothing behind on the island.
-     */
     fun stop() {
         sessionManager?.let { runCatching { it.removeOnActiveSessionsChangedListener(sessionsListener) } }
         watched.forEach { (controller, callback) -> controller.unregisterCallback(callback) }
         watched.clear()
         scope.coroutineContext.cancelChildren()
-        clearPendingShow()
-        NowPlayingBus.update(null)
-    }
-
-    /** Forgets the surfaced track and drops any pop still waiting to fire. */
-    private fun clearPendingShow() {
-        showJob?.cancel()
-        showJob = null
         lastShownKey = null
+        NowPlayingBus.update(null)
     }
 
     /** Attach callbacks to newly active sessions and detach ones that have gone away. */
@@ -130,16 +110,11 @@ class MediaPlaybackMonitor(private val context: Context) {
         sync()
     }
 
-    /** Stops watching one controller and re-syncs, for a session that has gone away. */
     private fun detach(controller: MediaController) {
         watched.remove(controller)?.let { controller.unregisterCallback(it) }
         sync()
     }
 
-    /**
-     * Whether the package is a voice assistant. Assistants publish a media session for their own
-     * chime, which would otherwise pop a music tile for a sound the user never started.
-     */
     private fun isAssistantPackage(packageName: String): Boolean {
         val pkg = packageName.lowercase()
         return pkg == "com.google.android.googlequicksearchbox" ||
@@ -174,7 +149,7 @@ class MediaPlaybackMonitor(private val context: Context) {
         val primary = validControllers.firstOrNull { it.isPlaying } ?: validControllers.firstOrNull()
         if (primary == null) {
             NowPlayingBus.update(null)
-            clearPendingShow()
+            lastShownKey = null
             return
         }
 
@@ -196,7 +171,7 @@ class MediaPlaybackMonitor(private val context: Context) {
         if (isAssistantPackage(primary.packageName)) {
             // Assistant sessions are handled exclusively via NotificationListenerService
             NowPlayingBus.update(null)
-            clearPendingShow()
+            lastShownKey = null
             return
         }
 
@@ -216,27 +191,20 @@ class MediaPlaybackMonitor(private val context: Context) {
 
         // Pop the island when a fresh track begins playing; reset when paused so a resume re-pops.
         if (!playing) {
-            clearPendingShow()
+            lastShownKey = null
             return
         }
         val key = "${primary.packageName}|$title|$artist"
-        if (key == lastShownKey) return
-        lastShownKey = key
-        // Held briefly rather than emitted here: players routinely report STATE_PLAYING a tick or two
-        // before publishing the track, so the same start arrives first as "no metadata" and then as
-        // the real title — two different keys, which read as two tracks starting and would leave the
-        // island showing the same tile twice. Waiting for the metadata to settle collapses that into
-        // one pop carrying the final track, while a genuine track change is still its own pop.
-        val signal = CutoutSignal.Music(
-            packageName = primary.packageName,
-            title = title,
-            artist = artist,
-            contentIntent = primary.sessionActivity,
-        )
-        showJob?.cancel()
-        showJob = scope.launch {
-            delay(SHOW_DEBOUNCE_MS)
-            IslandEventBus.emit(signal)
+        if (key != lastShownKey) {
+            lastShownKey = key
+            IslandEventBus.emit(
+                CutoutSignal.Music(
+                    packageName = primary.packageName,
+                    title = title,
+                    artist = artist,
+                    contentIntent = primary.sessionActivity,
+                ),
+            )
         }
     }
 
@@ -263,6 +231,7 @@ class MediaPlaybackMonitor(private val context: Context) {
             durationMs = duration,
             speed = speed,
             anchorUptimeMs = state.lastPositionUpdateTime.takeIf { it > 0L } ?: SystemClock.elapsedRealtime(),
+            canSeek = state.actions and PlaybackState.ACTION_SEEK_TO != 0L,
         )
     }
 
@@ -306,16 +275,13 @@ class MediaPlaybackMonitor(private val context: Context) {
         override fun next() {
             runCatching { controller.transportControls.skipToNext() }
         }
+
+        override fun seekTo(positionMs: Long) {
+            runCatching { controller.transportControls.seekTo(positionMs) }
+        }
     }
 
     private companion object {
         const val TAG = "MediaPlaybackMonitor"
-
-        /**
-         * How long a new track is held before it pops the island, letting a session that reports its
-         * playback state and its metadata in separate ticks settle into a single signal. Short enough
-         * that a real track change still feels immediate.
-         */
-        const val SHOW_DEBOUNCE_MS = 250L
     }
 }
