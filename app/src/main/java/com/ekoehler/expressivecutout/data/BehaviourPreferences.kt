@@ -142,7 +142,8 @@ data class BehaviourSettings(
         val DEFAULT_SATELLITE_POSITION = SatellitePosition.RIGHT
         const val MIN_ANIMATION_DURATION_MS = 0
         const val MAX_ANIMATION_DURATION_MS = 1000
-        const val MIN_NORMAL_SECONDS = 1
+        /** 0 is a sentinel meaning "never auto-dismiss" — see [MIN_NORMAL_SECONDS]. */
+        const val MIN_NORMAL_SECONDS = 0
         const val MAX_NORMAL_SECONDS = 10
         const val MIN_COLLAPSE_SECONDS = 1
         const val MAX_COLLAPSE_SECONDS = 15
