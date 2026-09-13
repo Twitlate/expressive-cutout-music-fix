@@ -436,6 +436,7 @@
     <string name="horizontal_cutout_center_desc">Goes to the top center of the horizontal screen</string>
     <string name="behaviour_animation_duration">Animation duration</string>
     <string name="behaviour_normal_duration">Normal cutout duration</string>
+    <string name="duration_indefinite">Indefinite</string>
     <string name="behaviour_auto_collapse">Collapse automatically</string>
     <string name="behaviour_auto_collapse_desc">Shrink the expanded island after a delay. When off, it stays expanded until you tap it.</string>
     <string name="behaviour_collapse_delay">Collapse after</string>
