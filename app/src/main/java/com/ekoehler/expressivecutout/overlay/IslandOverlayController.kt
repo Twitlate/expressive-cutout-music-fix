@@ -249,10 +249,18 @@ class IslandOverlayController(private val context: Context) {
     private var previewExpanded = false
     private var expanded = false
     /**
-     * True while a media session is actively playing; keeps the music cutout pinned up (no
-     * auto-dismiss) for as long as playback lasts.
+     * True while a media session is actively playing; drives the play/pause icon and the
+     * "visible in player app" foreground-hide check specifically.
      */
     private var musicPlaying = false
+    /**
+     * True whenever a media session exists at all — playing OR paused. Keeps the music cutout
+     * pinned up (no auto-dismiss) for as long as a session exists, mirroring how [callActive] and
+     * [timerActive] stay true for the life of a call/timer rather than only while literally
+     * "ringing". Pausing no longer drops the pill back onto the ordinary notification timeout —
+     * only the session actually ending does.
+     */
+    private var musicSessionActive = false
     /**
      * The last resolved music event, so the pill can return after a notification/system event that
      * briefly took over the cutout while playback carried on.
@@ -496,7 +504,7 @@ class IslandOverlayController(private val context: Context) {
                 expanded = false
                 currentEvent.value = lastCallEvent
             }
-            musicPlaying && lastMusicEvent != null && !playerAppHidden -> {
+            musicSessionActive && lastMusicEvent != null && !playerAppHidden -> {
                 dismissJob?.cancel()
                 currentEvent.value = lastMusicEvent
             }
@@ -857,6 +865,7 @@ class IslandOverlayController(private val context: Context) {
     private fun observeNowPlaying() = scope.launch {
         NowPlayingBus.state.collect { now ->
             musicPlaying = now?.isPlaying == true
+            musicSessionActive = now != null
             pruneSatellite()
             // Once the session ends there's nothing to return to.
             if (now == null) lastMusicEvent = null
@@ -865,7 +874,7 @@ class IslandOverlayController(private val context: Context) {
             applyPlayerAppVisibility()
             // Only steer the music pill; leave notifications/system events to their own timers.
             if (previewPinned || currentEvent.value?.media == null) return@collect
-            if (musicPlaying) dismissJob?.cancel() else scheduleDismiss()
+            if (musicSessionActive) dismissJob?.cancel() else scheduleDismiss()
         }
     }
 
@@ -971,8 +980,8 @@ class IslandOverlayController(private val context: Context) {
         }
     }
 
-    /** The music cutout should stay pinned up (no auto-dismiss) while music is playing. */
-    private fun isPinnedMusic(): Boolean = musicPlaying && currentEvent.value?.media != null
+    /** The music cutout should stay pinned up (no auto-dismiss) while a session exists, paused or not. */
+    private fun isPinnedMusic(): Boolean = musicSessionActive && currentEvent.value?.media != null
 
     /**
      * Follow the live call so the phone cutout stays up for exactly as long as the call lasts. The
@@ -1508,7 +1517,7 @@ class IslandOverlayController(private val context: Context) {
     private fun pruneSatellite() {
         val bubble = satelliteEvent.value ?: return
         val stale = when {
-            bubble.media != null -> !musicPlaying
+            bubble.media != null -> !musicSessionActive
             bubble.call != null -> !callActive
             bubble.timer != null -> !timerActive
             bubble.assistant != null -> !assistantActive
@@ -1784,9 +1793,13 @@ class IslandOverlayController(private val context: Context) {
     }
 
     /** Calculates the expiry time for a transient system event. */
-    private fun systemEventDeadline(type: SystemEventType): Long =
-        System.currentTimeMillis() +
-            (eventDurations[type] ?: behaviourState.value.normalDurationSeconds) * 1_000L
+    private fun systemEventDeadline(type: SystemEventType): Long {
+        val seconds = eventDurations[type] ?: behaviourState.value.normalDurationSeconds
+        // 0 is the "indefinite" sentinel; there is no real expiry, so park it far in the future
+        // rather than computing a deadline that's already passed.
+        if (seconds <= 0) return Long.MAX_VALUE
+        return System.currentTimeMillis() + seconds * 1_000L
+    }
 
     /**
      * The single consumer of [IslandEventBus]: turns each signal into a pill or a live tile,
@@ -1861,6 +1874,7 @@ class IslandOverlayController(private val context: Context) {
                     when (signal) {
                         is CutoutSignal.Music -> {
                             musicPlaying = true
+                            musicSessionActive = true
                             lastMusicEvent = resolvedEvent
                         }
                         is CutoutSignal.Call -> {
@@ -1922,6 +1936,7 @@ class IslandOverlayController(private val context: Context) {
             when (signal) {
                 is CutoutSignal.Music -> {
                     musicPlaying = true
+                    musicSessionActive = true
                     lastMusicEvent = resolvedEvent
                     dismissJob?.cancel()
                 }
@@ -2233,7 +2248,7 @@ class IslandOverlayController(private val context: Context) {
      */
     private fun musicPillToReturnTo(): IslandEvent? {
         if (showingLiveTile()) return null
-        if (!musicPlaying) return null
+        if (!musicSessionActive) return null
         if (tileEnabled[DynamicTile.MUSIC] == false) return null
         // Stay hidden while the playing app is in the foreground and "Visible in player app" is off.
         if (shouldHideForPlayerApp()) return null
@@ -2305,6 +2320,12 @@ class IslandOverlayController(private val context: Context) {
         // A system event with its own duration override wins; everything else uses the global normal.
         val seconds = currentSystemEventType?.let { eventDurations[it] }
             ?: behaviourState.value.normalDurationSeconds
+        // 0 is the "indefinite" sentinel — leave the pill up with no timer at all, exactly like a
+        // pinned live tile, until the user swipes it away or another event replaces it.
+        if (seconds <= 0) {
+            dismissJob = null
+            return
+        }
         currentDeadlineMs = System.currentTimeMillis() + seconds * 1_000L
         dismissJob = scope.launch {
             delay(seconds * 1_000L)
