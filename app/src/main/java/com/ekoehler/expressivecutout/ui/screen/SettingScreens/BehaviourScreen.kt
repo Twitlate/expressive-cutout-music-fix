@@ -115,7 +115,11 @@ internal fun BehaviourScreen(
         BehaviourSliderRow(
             shape = groupedShape(isFirst = false, isLast = false),
             label = stringResource(R.string.behaviour_normal_duration),
-            valueText = "${normalSeconds.roundToInt()} s",
+            valueText = if (normalSeconds.roundToInt() <= 0) {
+                stringResource(R.string.duration_indefinite)
+            } else {
+                "${normalSeconds.roundToInt()} s"
+            },
             value = normalSeconds,
             valueRange = BehaviourSettings.MIN_NORMAL_SECONDS.toFloat()..
                 BehaviourSettings.MAX_NORMAL_SECONDS.toFloat(),
