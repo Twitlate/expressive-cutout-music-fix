@@ -268,7 +268,11 @@ internal fun EventDetailScreen(
             ) {
                 AdjustableSlider(
                     label = stringResource(R.string.event_duration_label),
-                    valueText = "${durationSeconds.roundToInt()} s",
+                    valueText = if (durationSeconds.roundToInt() <= 0) {
+                        stringResource(R.string.duration_indefinite)
+                    } else {
+                        "${durationSeconds.roundToInt()} s"
+                    },
                     value = durationSeconds,
                     valueRange = BehaviourSettings.MIN_NORMAL_SECONDS.toFloat()..
                         BehaviourSettings.MAX_NORMAL_SECONDS.toFloat(),
